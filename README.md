@@ -139,33 +139,34 @@ If an item has screenshots in `metrics_json.screenshots`, the table will show a 
 
 During ingest, items are enriched with a lightweight offline regex approach by default.
 
-For **vision-first** enrichment using the captured TikTok screenshots, run the batch command:
+For **vision-first** enrichment using the captured TikTok screenshots, run the batch command (credential-free by default):
 
 ```bash
-# provider=codex is a placeholder hook for internal Codex OAuth runner
-moondev-clawdbot enrich-llm --limit 50 --provider codex
+moondev-clawdbot enrich-vision --limit 50 --provider stub
 ```
 
-This writes structured output into `metrics_json`:
-- `context_summary`
-- `key_entities`
-- `related_assets` (stocks/crypto/events with confidence)
+This writes structured output into `metrics_json.llm_enrich`, including:
+- `main_trend` / `context`
+- `entities`
+- `candidates` (stocks/crypto/events with confidence) + `asset_type`
 - `why_spreading`
 - `risk_flags`
 
-### Optional (future switch): real VLM via OpenAI
+### Optional: real VLM via OpenAI
 
-This repo intentionally does **not** use `OPENAI_API_KEY` during ingest runtime.
+The default provider is a deterministic offline stub so the repo runs without credentials.
 
-If you want to try OpenAI vision in the batch enrich step (behind an env flag), install the OpenAI SDK and set a key:
+If you want real vision-model output, install the OpenAI SDK and set a key:
 
 ```bash
 pip install openai
 export OPENAI_API_KEY=...
-export LLM_ENRICH_MODEL=gpt-4o-mini
+export VISION_ENRICH_MODEL=gpt-4o-mini
 
-moondev-clawdbot enrich-llm --provider openai --limit 50
+moondev-clawdbot enrich-vision --provider openai --limit 50
 ```
+
+(You can also run `--provider codex` as a placeholder hook for an internal runner; this repo will fall back to stub output.)
 
 ## CLI
 
