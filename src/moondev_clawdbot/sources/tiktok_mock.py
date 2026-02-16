@@ -42,6 +42,7 @@ class TikTokMockSource(Source):
                 title = j.get("title") or "(tiktok)"
                 text = j.get("text")
                 metrics = j.get("metrics") or {}
+                metrics.setdefault("collector", "mock")
                 if current_kw and "keyword" not in metrics:
                     metrics["keyword"] = current_kw
                 out.append(
@@ -64,13 +65,13 @@ class TikTokMockSource(Source):
                 "url": "https://www.tiktok.com/@example/video/111",
                 "title": "New drink brand is everywhere (Gen Z)",
                 "text": "Seeing this brand in every college video…",
-                "metrics": {"views": 2_500_000, "likes": 210_000, "comments": 3_200, "shares": 18_000, "view_velocity": 0.82, "keyword": current_kw},
+                "metrics": {"views": 2_500_000, "likes": 210_000, "comments": 3_200, "shares": 18_000, "view_velocity": 0.82, "keyword": current_kw, "collector": "mock"},
             },
             {
                 "url": "https://www.tiktok.com/@example/video/222",
                 "title": "Abercrombie haul revival??",
                 "text": "ABERCROMBIE is back and no one told Wall St.",
-                "metrics": {"views": 1_200_000, "likes": 95_000, "comments": 1_100, "shares": 7_500, "view_velocity": 0.74, "keyword": current_kw},
+                "metrics": {"views": 1_200_000, "likes": 95_000, "comments": 1_100, "shares": 7_500, "view_velocity": 0.74, "keyword": current_kw, "collector": "mock"},
             },
         ]
         for j in mock:

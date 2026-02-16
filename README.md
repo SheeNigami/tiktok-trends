@@ -50,6 +50,43 @@ Example line:
 
 Keyword rotation is controlled by `config/keywords.txt` (the scanner rotates one keyword per run).
 
+### 2b) (Optional) Use the Playwright TikTok collector (real links)
+
+By default, the `tiktok` source uses seed/mock data unless you set:
+
+```bash
+export TIKTOK_COLLECTOR=playwright
+```
+
+Run these from the **repo root** (or set `CLAWDBOT_DB_PATH` to an absolute path) so the CLI and `node server.js` read/write the **same SQLite file**:
+
+```bash
+# one-time setup
+pip install playwright
+playwright install chromium
+
+# first run headful so you can log in and persist cookies
+export TIKTOK_COLLECTOR=playwright
+export TIKTOK_HEADLESS=0
+moondev-clawdbot ingest --sources tiktok
+```
+
+If the dashboard still shows `https://www.tiktok.com/@example/video/...`, you likely have old mock rows in the DB (see cleanup below).
+
+### 2c) Cleanup: remove placeholder `@example` rows (optional)
+
+Dry-run (prints matches, no deletes):
+
+```bash
+python3 scripts/cleanup_example_rows.py --db ./data/clawdbot.sqlite
+```
+
+Apply (actually deletes):
+
+```bash
+python3 scripts/cleanup_example_rows.py --db ./data/clawdbot.sqlite --apply
+```
+
 ### 3) Run one pipeline cycle (ingest → score → alert)
 
 ```bash
