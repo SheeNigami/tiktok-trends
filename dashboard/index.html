@@ -293,7 +293,7 @@
         <tr>
           <th data-sort="fetched_at" class="sortable" style="width:130px;">Time<span class="sort-ind"></span></th>
           <th data-sort="ticker" class="sortable" style="width:110px;">Ticker<span class="sort-ind"></span></th>
-          <th data-sort="brand" class="sortable" style="width:220px;">Brand<span class="sort-ind"></span></th>
+          <th data-sort="trend" class="sortable" style="width:260px;">Trend<span class="sort-ind"></span></th>
           <th data-sort="source" class="sortable" style="width:130px;">Source<span class="sort-ind"></span></th>
           <th data-sort="score" class="sortable" style="width:120px;">Conf<span class="sort-ind"></span></th>
           <th data-sort="context" class="sortable">Context<span class="sort-ind"></span></th>
@@ -497,6 +497,7 @@
     function val(x) {
       if (key === 'fetched_at') return Date.parse(x.r.fetched_at || '') || 0;
       if (key === 'ticker') return (x.ticker || '').toLowerCase();
+      if (key === 'trend') return (x.trend || '').toLowerCase();
       if (key === 'brand') return (x.brand || '').toLowerCase();
       if (key === 'source') return (x.r.source || '').toLowerCase();
       if (key === 'score') return (x.r.score === null || x.r.score === undefined) ? null : Number(x.r.score);
@@ -596,13 +597,16 @@
       } catch(e) {}
 
       const { ticker, brand } = extractBrandTicker(m, r.title);
+      const ve = (m && typeof m === 'object') ? (m.llm_enrich || null) : null;
+      const trend = (ve && ve.main_trend) ? String(ve.main_trend) : (brand || (r.title || ''));
+      const ctxPrimary = (ve && ve.context) ? String(ve.context) : '';
       if (ticker) byTicker.set(ticker, (byTicker.get(ticker) || 0) + 1);
 
       if (type !== 'all' && itType !== type) continue;
       if (source !== 'all' && (r.source || '') !== source) continue;
       if (conf !== 'all' && cb !== conf) continue;
 
-      const hay = `${ticker} ${brand} ${(r.title||'')} ${(r.text||'')} ${(m.keyword||'')}`.toLowerCase();
+      const hay = `${ticker} ${trend} ${brand} ${(r.title||'')} ${(r.text||'')} ${ctxPrimary} ${(m.keyword||'')}`.toLowerCase();
       if (q && !hay.includes(q)) continue;
 
       const exposure = [];
@@ -623,7 +627,9 @@
       if (m.comments != null) ctxBits.push(`comments: ${m.comments}`);
       if (m.shares != null) ctxBits.push(`shares: ${m.shares}`);
 
-      rows.push({ r, m, ticker, brand, ft, cb, exposure: exposure.join(' — '), context: ctxBits.join(' | ') });
+      const contextPrimary = ctxPrimary || (r.text || r.title || '');
+      const contextMeta = ctxBits.join(' | ');
+      rows.push({ r, m, ticker, brand, trend, ft, cb, exposure: exposure.join(' — '), context: contextPrimary, contextMeta });
     }
 
     // chips
@@ -673,15 +679,16 @@
         <td class="small">${escapeHtml(x.ft)}</td>
         <td><span class="chip">${escapeHtml(x.ticker || '—')}</span></td>
         <td>
-          <div style="font-weight:650;">${escapeHtml(x.brand || '')}</div>
+          <div style="font-weight:650;">${escapeHtml(x.trend || x.brand || '')}</div>
           <div class="small">
+            ${x.brand && x.trend && (x.brand !== x.trend) ? escapeHtml(x.brand) + ' • ' : ''}
             <a href="${escapeAttr(url)}" target="_blank" rel="noreferrer">open</a>
             ${view ? ` • ${view}` : ''}
           </div>
         </td>
         <td><span class="chip">${escapeHtml(x.r.source || '')}</span></td>
         <td>${confCell(x.r.score)}</td>
-        <td>${escapeHtml(x.r.text || x.r.title || '')}<div class="small" style="margin-top:6px;">${escapeHtml(x.context)}</div></td>
+        <td>${escapeHtml(x.context || '')}<div class="small" style="margin-top:6px;">${escapeHtml(x.contextMeta || '')}</div></td>
         <td>${escapeHtml(x.exposure || '')}</td>
       `;
       tbody.appendChild(tr);
