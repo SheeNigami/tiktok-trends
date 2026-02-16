@@ -223,7 +223,20 @@ class TikTokPlaywrightSource(Source):
 
             # Try not to look like a bot too aggressively.
             page.set_default_timeout(30_000)
-            page.goto(search_url, wait_until="domcontentloaded")
+
+            def _goto_with_retry(url: str) -> None:
+                """Navigate and retry once if TikTok shows the 'Something went wrong' server block."""
+                page.goto(url, wait_until="domcontentloaded")
+                try:
+                    if page.get_by_text("Something went wrong").first.is_visible(timeout=1500):
+                        # user-requested backoff
+                        print("[tiktok] Hit 'Something went wrong' — backing off 150s then retrying once...")
+                        page.wait_for_timeout(150_000)
+                        page.goto(url, wait_until="domcontentloaded")
+                except Exception:
+                    pass
+
+            _goto_with_retry(search_url)
 
             # If we get a login wall, allow user to log in.
             # Heuristic: presence of "Log in" button/text.
