@@ -25,8 +25,8 @@ Env vars:
 - TIKTOK_COLLECTOR=playwright  (enables this collector via registry)
 
 Screenshots (always captured for collected TikToks):
-- TIKTOK_SCREENSHOT_COUNT=5 (default 5; max 5)
-- TIKTOK_SCREENSHOT_INTERVAL_SEC=3 (default 3)
+- TIKTOK_SCREENSHOT_COUNT=4 (default 4; max 5)
+- TIKTOK_SCREENSHOT_INTERVAL_SEC=2 (default 2)
 
 Setup:
 - `pip install playwright`
@@ -196,9 +196,9 @@ class TikTokPlaywrightSource(Source):
         locale = os.getenv("TIKTOK_LOCALE", "en")
 
         # Screenshots are ALWAYS captured for collected TikToks.
-        # Requirement: capture up to 5 frames per post, spaced by an interval.
-        screenshot_count = max(1, _env_int("TIKTOK_SCREENSHOT_COUNT", 5))
-        screenshot_interval_sec = max(0.25, _env_float("TIKTOK_SCREENSHOT_INTERVAL_SEC", 3.0))
+        # Default: every 2 seconds, up to 4 frames (user preference), but allow overrides.
+        screenshot_count = max(1, _env_int("TIKTOK_SCREENSHOT_COUNT", 4))
+        screenshot_interval_sec = max(0.25, _env_float("TIKTOK_SCREENSHOT_INTERVAL_SEC", 2.0))
         effective_count = min(screenshot_count, 5)
 
         kw = next_keyword() or "trending"
