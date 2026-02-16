@@ -196,15 +196,41 @@ def run_daemon(
     min_score: float = typer.Option(0.65, help="Minimum score to send"),
     top_k: int = typer.Option(10, help="Max items to send"),
     channel: str = typer.Option("auto", help="stdout|telegram|discord|auto"),
+    # Full-pipeline additions
+    enrich: bool = typer.Option(True, help="Run vision enrichment each cycle"),
+    enrich_provider: str = typer.Option(
+        "stub",
+        help="Vision enrich provider: stub (default, no credentials) | openai (requires OPENAI_API_KEY + openai pkg)",
+    ),
+    enrich_limit: int = typer.Option(30, help="How many items to vision-enrich each cycle"),
+    enrich_overwrite: bool = typer.Option(False, help="Overwrite existing metrics.llm_enrich"),
     env_file: Optional[str] = typer.Option(None, help="Path to .env"),
 ):
+    """Run the whole pipeline in a loop: ingest → score → (optional) vision-enrich → alert."""
+
     settings = load_settings(env_file)
     srcs = _parse_sources(sources)
-    console.print(f"Running daemon every {interval_sec}s; sources={srcs}")
+    console.print(f"Running daemon every {interval_sec}s; sources={srcs}; enrich={enrich} ({enrich_provider})")
+
+    enrich_provider = (enrich_provider or "stub").strip().lower()
+
     while True:
         try:
             ingest_run(settings.db_path, srcs)
             score_run(settings.db_path)
+
+            if enrich:
+                from .vision_enrich import enrich_db_vision
+
+                enrich_db_vision(
+                    settings.db_path,
+                    limit=int(enrich_limit),
+                    provider=enrich_provider,
+                    overwrite=bool(enrich_overwrite),
+                    max_images=5,
+                    source="tiktok",
+                )
+
             import json
 
             store = Store(settings.db_path)
