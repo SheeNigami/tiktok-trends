@@ -287,6 +287,9 @@ class TikTokPlaywrightSource(Source):
                             href = (j.get("url") or "").strip()
                             if not href or "/video/" not in href:
                                 continue
+                            # Avoid ever navigating to mock/example URLs
+                            if "tiktok.com/@example/" in href:
+                                continue
                             href = href.split("?")[0]
                             if href in seen:
                                 continue
