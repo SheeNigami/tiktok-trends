@@ -57,18 +57,31 @@ function querySignals(minScore) {
 }
 
 function queryItem(itemId) {
-  if (!/^[0-9a-f]{24}$/i.test(String(itemId || ''))) return null;
+  const id = String(itemId || '').trim().toLowerCase();
+  if (!/^[0-9a-f]{24}$/i.test(id)) return null;
 
-  const sql = `
-    SELECT item_id, source, url, title, text, metrics_json, score, created_at, fetched_at
-    FROM items
-    WHERE item_id = '${String(itemId).toLowerCase()}'
-    LIMIT 1;
-  `;
-  const out = execFileSync('sqlite3', ['-json', DB_PATH, sql], { encoding: 'utf-8' });
-  let rows = [];
-  try { rows = JSON.parse(out || '[]'); } catch (e) { rows = []; }
-  return rows[0] || null;
+  // Primary: direct SQL fetch
+  const sql = `SELECT item_id, source, url, title, text, metrics_json, score, created_at, fetched_at FROM items WHERE item_id = '${id}' LIMIT 1;`;
+  let out = '';
+  try {
+    out = execFileSync('sqlite3', ['-json', DB_PATH, sql], { encoding: 'utf-8' }) || '';
+  } catch (e) {
+    out = '';
+  }
+
+  try {
+    const rows = JSON.parse(out || '[]');
+    if (rows && rows[0]) return rows[0];
+  } catch (e) {}
+
+  // Fallback: query top items and find by id (works even if sqlite3 returns empty for some reason)
+  try {
+    const all = querySignals(0.0);
+    const found = all.find(r => String(r.item_id || '').toLowerCase() === id);
+    return found || null;
+  } catch (e) {
+    return null;
+  }
 }
 
 const server = http.createServer((req, res) => {
