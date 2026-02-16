@@ -1,10 +1,10 @@
 from __future__ import annotations
 
+import json
 import sqlite3
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
-import json
-from datetime import datetime, timezone
 
 from .models import Item
 
@@ -108,13 +108,65 @@ class Store:
 
     def top_items(self, limit: int = 50, min_score: float | None = None):
         q = "SELECT * FROM items"
-        params = []
+        params: list[object] = []
         if min_score is not None:
             q += " WHERE score IS NOT NULL AND score >= ?"
             params.append(min_score)
         # SQLite NULL ordering can be surprising; force scored items first.
         q += " ORDER BY (score IS NULL) ASC, score DESC, fetched_at DESC LIMIT ?"
-        params.append(limit)
+        params.append(int(limit))
         with self._conn() as conn:
             rows = conn.execute(q, params).fetchall()
         return [dict(r) for r in rows]
+
+    def get_item(self, item_id: str) -> dict | None:
+        with self._conn() as conn:
+            row = conn.execute("SELECT * FROM items WHERE item_id=? LIMIT 1", (item_id,)).fetchone()
+        return dict(row) if row else None
+
+    def fetch_recent(self, limit: int = 200, source: str | None = None):
+        q = "SELECT * FROM items"
+        params: list[object] = []
+        if source:
+            q += " WHERE source = ?"
+            params.append(source)
+        q += " ORDER BY fetched_at DESC LIMIT ?"
+        params.append(int(limit))
+        with self._conn() as conn:
+            rows = conn.execute(q, params).fetchall()
+        return [dict(r) for r in rows]
+
+    def merge_metrics_json(self, item_id: str, patch: dict, *, overwrite: bool = False) -> bool:
+        """Merge `patch` into the item's metrics_json.
+
+        overwrite=False (default): existing keys are preserved unless overwritten by patch.
+        overwrite=True: replace metrics_json entirely with `patch`.
+
+        Returns True if the row existed and was updated.
+        """
+
+        with self._conn() as conn:
+            row = conn.execute("SELECT metrics_json FROM items WHERE item_id=?", (item_id,)).fetchone()
+            if not row:
+                return False
+
+            cur: dict[str, object] = {}
+            try:
+                cur0 = json.loads(row[0] or "{}")
+                if isinstance(cur0, dict):
+                    cur = cur0
+            except Exception:
+                cur = {}
+
+            if overwrite:
+                newm = dict(patch or {})
+            else:
+                newm = dict(cur)
+                newm.update(patch or {})
+
+            conn.execute(
+                "UPDATE items SET metrics_json=? WHERE item_id=?",
+                (json.dumps(newm, ensure_ascii=False), item_id),
+            )
+
+        return True

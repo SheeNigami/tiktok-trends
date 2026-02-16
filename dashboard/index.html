@@ -427,13 +427,15 @@
 
     const it = j.item || {};
     const m = it.metrics || {};
+    const ve = (m && typeof m === 'object') ? (m.llm_enrich || null) : null;
     const shots = it.screenshot_urls || [];
 
-    const risk = m.risk_flags || null;
+    const risk = (ve && ve.risk_flags) ? ve.risk_flags : (m.risk_flags || null);
     const riskBits = [];
     if (risk && typeof risk === 'object') {
       if (risk.ad_sponsored) riskBits.push('ad/sponsored');
       if (risk.misinformation_or_medical_claim) riskBits.push('misinfo/medical');
+      if (risk.scam_or_impersonation) riskBits.push('scam/impersonation');
     }
 
     const header = `
@@ -445,16 +447,31 @@
       ${renderKV('creator', m.creator)}
       ${renderKV('hashtags', m.hashtags)}
       ${renderKV('sound', [m.sound_title, m.sound_artist].filter(Boolean).join(' — '))}
+      ${renderKV('vision trend', ve && ve.main_trend)}
+      ${renderKV('vision context', ve && ve.context)}
       ${renderKV('summary', m.context_summary)}
-      ${renderKV('why spreading', m.why_spreading)}
+      ${renderKV('why spreading', (ve && ve.why_spreading) ? ve.why_spreading : m.why_spreading)}
     `;
+
+    const cands = (ve && Array.isArray(ve.candidates)) ? ve.candidates : [];
+    const candHtml = cands.length ? `
+      <div style="margin-top:12px; font-weight:700;">Candidates</div>
+      <div class="meta">${cands.slice(0,5).map(c => {
+        const t = escapeHtml(c.asset_type || 'other');
+        const sym = escapeHtml(c.symbol || '');
+        const nm = escapeHtml(c.name || '');
+        const cf = (c.confidence === null || c.confidence === undefined) ? '' : ` (${Number(c.confidence).toFixed(2)})`;
+        const why = escapeHtml(c.reason || '');
+        return `<div class="meta"><span class="chip">${t}${sym ? `:${sym}` : ''}${cf}</span> ${nm}${why ? ` — ${why}` : ''}</div>`;
+      }).join('')}</div>
+    ` : '';
 
     const shotsHtml = shots.length ? `
       <div style="margin-top:12px; font-weight:700;">Screenshots</div>
       <div class="shots">${shots.map(u => `<a href="${escapeAttr(u)}" target="_blank" rel="noreferrer"><img src="${escapeAttr(u)}" loading="lazy" /></a>`).join('')}</div>
     ` : `<div class="small" style="margin-top:12px;">No screenshots on this item.</div>`;
 
-    drawerBody.innerHTML = header + shotsHtml;
+    drawerBody.innerHTML = header + candHtml + shotsHtml;
   }
 
   document.getElementById('closeDrawer').addEventListener('click', closeDrawer);

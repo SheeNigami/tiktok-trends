@@ -51,6 +51,55 @@ def score(
     score_run(settings.db_path, limit=limit)
 
 
+@app.command("enrich-vision")
+def enrich_vision(
+    limit: int = typer.Option(50, help="How many items to enrich (max)."),
+    provider: str = typer.Option(
+        "stub",
+        help="stub (default, no credentials) | openai (requires OPENAI_API_KEY + openai pkg)",
+    ),
+    overwrite: bool = typer.Option(False, help="Overwrite existing metrics.llm_enrich if present."),
+    max_images: int = typer.Option(5, help="How many screenshots to send/use per item."),
+    env_file: Optional[str] = typer.Option(None, help="Path to .env"),
+):
+    """Batch vision enrichment.
+
+    Writes output into metrics_json['llm_enrich'].
+    """
+
+    from .vision_enrich import enrich_db_vision
+
+    settings = load_settings(env_file)
+    n = enrich_db_vision(
+        settings.db_path,
+        limit=limit,
+        provider=(provider or "stub").strip().lower(),
+        overwrite=overwrite,
+        max_images=max_images,
+        source="tiktok",
+    )
+    console.print(f"[green]Vision-enriched[/green] {n} items (provider={provider})")
+
+
+@app.command("enrich-llm")
+def enrich_llm_compat(
+    limit: int = typer.Option(50, help="How many items to enrich (max)."),
+    provider: str = typer.Option("stub", help="Alias for enrich-vision --provider"),
+    overwrite: bool = typer.Option(False, help="Overwrite existing metrics.llm_enrich if present."),
+    max_images: int = typer.Option(5, help="How many screenshots to send/use per item."),
+    env_file: Optional[str] = typer.Option(None, help="Path to .env"),
+):
+    """Backward-compatible alias for `enrich-vision`."""
+
+    return enrich_vision(
+        limit=limit,
+        provider=provider,
+        overwrite=overwrite,
+        max_images=max_images,
+        env_file=env_file,
+    )
+
+
 @app.command()
 def alert(
     min_score: float = typer.Option(0.65, help="Minimum score to send"),
@@ -61,6 +110,7 @@ def alert(
     settings = load_settings(env_file)
     store = Store(settings.db_path)
     import json
+
     rows = store.top_items(limit=top_k, min_score=min_score)
     items: list[Item] = []
     for r in rows:
@@ -113,6 +163,7 @@ def run_once(
 
     store = Store(settings.db_path)
     import json
+
     rows = store.top_items(limit=top_k, min_score=min_score)
     items = []
     for r in rows:
@@ -155,6 +206,7 @@ def run_daemon(
             ingest_run(settings.db_path, srcs)
             score_run(settings.db_path)
             import json
+
             store = Store(settings.db_path)
             rows = store.top_items(limit=top_k, min_score=min_score)
             items = []

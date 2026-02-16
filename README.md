@@ -73,13 +73,12 @@ moondev-clawdbot ingest --sources tiktok
 
 If the dashboard still shows `https://www.tiktok.com/@example/video/...`, you likely have old mock rows in the DB (see cleanup below).
 
-#### (Optional) Capture per-post screenshots (Playwright collector)
+#### Screenshot capture (Playwright collector, always-on)
 
-If you want to save a few frames for later OCR / debugging:
+When using the Playwright TikTok collector, the ingest step **always** captures screenshots per video (default: 5 frames, every 3 seconds). You can tune capture settings:
 
 ```bash
 export TIKTOK_COLLECTOR=playwright
-export TIKTOK_SCREENSHOTS=1
 export TIKTOK_SCREENSHOT_COUNT=5
 export TIKTOK_SCREENSHOT_INTERVAL_SEC=3
 
@@ -136,25 +135,36 @@ node server.js
 
 If an item has screenshots in `metrics_json.screenshots`, the table will show a **view** link and you can click the row to open a side panel with the screenshot frames.
 
-## Optional: LLM enrichment (OpenAI)
+## Vision-first enrichment (batch)
 
 During ingest, items are enriched with a lightweight offline regex approach by default.
 
-If you set `OPENAI_API_KEY` **and** have the `openai` Python package installed, the ingest step will additionally call OpenAI Chat Completions to produce structured fields in `metrics_json`, including:
-
-- `context_summary` (1–2 sentences)
-- `key_entities`
-- `related_tickers` (with confidence)
-- `why_spreading`
-- `risk_flags` (ad/sponsored, misinformation/medical claim)
-
-Optional OCR: if `pytesseract` is installed and the `tesseract` binary is available, the enrich step will OCR up to a couple screenshots and include that text in the LLM prompt.
-
-Config:
+For **vision-first** enrichment using the captured TikTok screenshots, run the batch command:
 
 ```bash
+# provider=codex is a placeholder hook for internal Codex OAuth runner
+moondev-clawdbot enrich-llm --limit 50 --provider codex
+```
+
+This writes structured output into `metrics_json`:
+- `context_summary`
+- `key_entities`
+- `related_assets` (stocks/crypto/events with confidence)
+- `why_spreading`
+- `risk_flags`
+
+### Optional (future switch): real VLM via OpenAI
+
+This repo intentionally does **not** use `OPENAI_API_KEY` during ingest runtime.
+
+If you want to try OpenAI vision in the batch enrich step (behind an env flag), install the OpenAI SDK and set a key:
+
+```bash
+pip install openai
 export OPENAI_API_KEY=...
-export OPENAI_MODEL=gpt-4o-mini
+export LLM_ENRICH_MODEL=gpt-4o-mini
+
+moondev-clawdbot enrich-llm --provider openai --limit 50
 ```
 
 ## CLI

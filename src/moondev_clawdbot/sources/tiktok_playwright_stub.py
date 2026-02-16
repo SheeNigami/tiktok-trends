@@ -10,7 +10,7 @@ How it works:
 - Navigates to TikTok search results for that keyword.
 - Scrolls a bit and extracts unique `/video/` links + nearby text.
 - Opens each video page and extracts caption + best-effort metadata.
-- (Optional) Captures per-post screenshots (for later OCR/LLM enrichment).
+- Captures per-post screenshots (for later vision/LLM enrichment).
 
 Important:
 TikTok changes DOM frequently and has anti-bot measures. This implementation is
@@ -24,10 +24,10 @@ Env vars:
 - TIKTOK_LOCALE=en
 - TIKTOK_COLLECTOR=playwright  (enables this collector via registry)
 
-Screenshots (default on for the Playwright collector):
-- TIKTOK_SCREENSHOTS=1|0 (default 1)  # set 0 to disable
-- TIKTOK_SCREENSHOT_COUNT=5 (default 5; max 5)
+Screenshots (always captured for collected TikToks):
+- TIKTOK_SCREENSHOT_COUNT=5 (default 5)
 - TIKTOK_SCREENSHOT_INTERVAL_SEC=3 (default 3)
+  (hard cap: ~15s total per post)
 
 Setup:
 - `pip install playwright`
@@ -196,12 +196,11 @@ class TikTokPlaywrightSource(Source):
         scrolls = _env_int("TIKTOK_SCROLLS", 6)
         locale = os.getenv("TIKTOK_LOCALE", "en")
 
-        # Screenshots are ON by default for the Playwright collector (requirement: always capture frames).
-        screenshots_enabled = _env_bool("TIKTOK_SCREENSHOTS", True)
+        # Screenshots are ALWAYS captured for collected TikToks (no threshold).
+        # Tune via count/interval; hard cap ~15s total per post.
         screenshot_count = max(1, _env_int("TIKTOK_SCREENSHOT_COUNT", 5))
         screenshot_interval_sec = max(0.25, _env_float("TIKTOK_SCREENSHOT_INTERVAL_SEC", 3.0))
-        # Requirement: capture up to 5 frames per post.
-        effective_count = min(screenshot_count, 5)
+        effective_count = min(screenshot_count, max(1, int(15.0 // screenshot_interval_sec)))
 
         kw = next_keyword() or "trending"
         now = datetime.now(timezone.utc).isoformat()
@@ -462,28 +461,27 @@ class TikTokPlaywrightSource(Source):
                     # even if TikTok caption/title text changes between runs.
                     item_id = stable_id(self.name, url)
 
-                    # Optional screenshots
-                    if screenshots_enabled:
-                        try:
-                            page.wait_for_selector("video", timeout=5000)
-                        except Exception:
-                            pass
+                    # Screenshots (always)
+                    try:
+                        page.wait_for_selector("video", timeout=5000)
+                    except Exception:
+                        pass
 
-                        shot_dir = os.path.abspath(os.path.join("./data/screenshots", item_id))
-                        os.makedirs(shot_dir, exist_ok=True)
-                        shots: list[str] = []
-                        for i in range(effective_count):
-                            if i > 0:
-                                page.wait_for_timeout(int(screenshot_interval_sec * 1000))
-                            fn = f"frame_{i+1:02d}.png"
-                            abs_path = os.path.join(shot_dir, fn)
-                            try:
-                                page.screenshot(path=abs_path)
-                                shots.append(_relpath_posix(abs_path))
-                            except Exception:
-                                break
-                        # Always store the list (may be empty if screenshotting failed).
-                        metrics["screenshots"] = shots
+                    shot_dir = os.path.abspath(os.path.join("./data/screenshots", item_id))
+                    os.makedirs(shot_dir, exist_ok=True)
+                    shots: list[str] = []
+                    for i in range(effective_count):
+                        if i > 0:
+                            page.wait_for_timeout(int(screenshot_interval_sec * 1000))
+                        fn = f"frame_{i+1:02d}.png"
+                        abs_path = os.path.join(shot_dir, fn)
+                        try:
+                            page.screenshot(path=abs_path)
+                            shots.append(_relpath_posix(abs_path))
+                        except Exception:
+                            break
+                    # Always store the list (may be empty if screenshotting failed).
+                    metrics["screenshots"] = shots
 
                 except Exception:
                     # If navigation fails, keep the minimal data.
