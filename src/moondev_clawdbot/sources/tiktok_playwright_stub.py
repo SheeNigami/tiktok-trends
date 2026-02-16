@@ -469,9 +469,41 @@ class TikTokPlaywrightSource(Source):
                     shot_dir = os.path.abspath(os.path.join("./data/screenshots", item_id))
                     os.makedirs(shot_dir, exist_ok=True)
                     shots: list[str] = []
+
+                    def _video_state() -> dict:
+                        try:
+                            return page.eval_on_selector(
+                                "video",
+                                """v => ({
+                                  ended: !!v.ended,
+                                  currentTime: Number(v.currentTime || 0),
+                                  duration: Number(v.duration || 0),
+                                  paused: !!v.paused
+                                })""",
+                            ) or {}
+                        except Exception:
+                            return {}
+
+                    prev_t: float | None = None
                     for i in range(effective_count):
                         if i > 0:
                             page.wait_for_timeout(int(screenshot_interval_sec * 1000))
+
+                        st = _video_state()
+                        ct = None
+                        try:
+                            ct = float(st.get("currentTime"))
+                        except Exception:
+                            ct = None
+
+                        # Stop early if the video ended.
+                        if st.get("ended") is True:
+                            break
+
+                        # Stop early if we detect a loop (currentTime drops significantly).
+                        if prev_t is not None and ct is not None and (ct + 0.25) < prev_t:
+                            break
+
                         fn = f"frame_{i+1:02d}.png"
                         abs_path = os.path.join(shot_dir, fn)
                         try:
@@ -479,6 +511,9 @@ class TikTokPlaywrightSource(Source):
                             shots.append(_relpath_posix(abs_path))
                         except Exception:
                             break
+
+                        if ct is not None:
+                            prev_t = ct
                     # Always store the list (may be empty if screenshotting failed).
                     metrics["screenshots"] = shots
 
