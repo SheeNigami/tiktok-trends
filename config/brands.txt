@@ -1,0 +1,11 @@
+# Optional: add brands/companies you care about (one per line)
+NVIDIA
+Apple
+Microsoft
+Tesla
+OpenAI
+Anthropic
+TikTok
+Meta
+Google
+Amazon

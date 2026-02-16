@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.dist/
+.build/
+.venv/
+
+# Node
+node_modules/
+
+# Local data / outputs
+/data/
+/tmp/
+/logs*
+*.log
+*.pid
+
+# Playwright persistent profiles (contains cookies)
+/data/playwright/
+
+# OS
+.DS_Store

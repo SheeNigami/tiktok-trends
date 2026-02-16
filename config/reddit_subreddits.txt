@@ -1,0 +1,4 @@
+SideProject
+Entrepreneur
+ArtificialInteligence
+MachineLearning
