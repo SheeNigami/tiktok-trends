@@ -9,7 +9,8 @@ How it works:
 - Rotates a keyword each run via `keywords.next_keyword()`.
 - Navigates to TikTok search results for that keyword.
 - Scrolls a bit and extracts unique `/video/` links + nearby text.
-- Attempts to parse lightweight metrics when present (best-effort).
+- Opens each video page and extracts caption + best-effort metadata.
+- (Optional) Captures per-post screenshots (for later OCR/LLM enrichment).
 
 Important:
 TikTok changes DOM frequently and has anti-bot measures. This implementation is
@@ -23,6 +24,11 @@ Env vars:
 - TIKTOK_LOCALE=en
 - TIKTOK_COLLECTOR=playwright  (enables this collector via registry)
 
+Screenshots (default on for the Playwright collector):
+- TIKTOK_SCREENSHOTS=1|0 (default 1)  # set 0 to disable
+- TIKTOK_SCREENSHOT_COUNT=5 (default 5; max 5)
+- TIKTOK_SCREENSHOT_INTERVAL_SEC=3 (default 3)
+
 Setup:
 - `pip install playwright`
 - `playwright install chromium`
@@ -33,8 +39,8 @@ Then run:
 
 from __future__ import annotations
 
-from dataclasses import asdict
 from datetime import datetime, timezone
+import json
 import os
 import re
 from typing import Any, Dict, List, Optional, Tuple
@@ -50,6 +56,13 @@ _VIDEO_RE = re.compile(r"/video/\d+")
 def _env_int(name: str, default: int) -> int:
     try:
         return int(os.getenv(name, str(default)))
+    except Exception:
+        return default
+
+
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(os.getenv(name, str(default)))
     except Exception:
         return default
 
@@ -80,6 +93,92 @@ def _parse_count(s: str) -> Optional[int]:
     return int(val * mult)
 
 
+def _relpath_posix(p: str) -> str:
+    rel = os.path.relpath(p, start=os.path.abspath("."))
+    return rel.replace(os.sep, "/")
+
+
+def _hashtags_from_text(text: str | None) -> list[str]:
+    if not text:
+        return []
+    # TikTok tags are often alnum/_; keep it conservative.
+    tags = re.findall(r"(?<!\w)#([\w_]{1,64})", text)
+    out = [f"#{t}" for t in tags if t]
+    # de-dupe while preserving order
+    seen = set()
+    uniq = []
+    for t in out:
+        if t in seen:
+            continue
+        seen.add(t)
+        uniq.append(t)
+    return uniq
+
+
+def _parse_sound_text(s: str | None) -> tuple[str | None, str | None]:
+    """Heuristically split a TikTok sound string into (title, artist)."""
+    if not s:
+        return None, None
+    s = _clean_text(s)
+    if not s:
+        return None, None
+
+    # common: "original sound - user" or "Song Title - Artist"
+    if " - " in s:
+        a, b = s.split(" - ", 1)
+        return _clean_text(a) or None, _clean_text(b) or None
+
+    # sometimes uses a bullet
+    if " • " in s:
+        a, b = s.split(" • ", 1)
+        return _clean_text(a) or None, _clean_text(b) or None
+
+    return s, None
+
+
+def _try_extract_next_data(page) -> dict | None:
+    """Best-effort: parse TikTok __NEXT_DATA__ to extract stable metadata."""
+    try:
+        txt = page.locator("script#__NEXT_DATA__").first.inner_text(timeout=1500)
+        if not txt or not txt.strip():
+            return None
+        return json.loads(txt)
+    except Exception:
+        return None
+
+
+def _dig(d: Any, path: list[str]) -> Any:
+    cur = d
+    for k in path:
+        if not isinstance(cur, dict) or k not in cur:
+            return None
+        cur = cur.get(k)
+    return cur
+
+
+def _find_first_dict_with_key(obj: Any, key: str, max_nodes: int = 20_000) -> dict | None:
+    """Shallow-ish DFS to find first dict containing `key`.
+
+    Hard node limit to avoid pathological page JSON.
+    """
+    stack = [obj]
+    seen = 0
+    while stack and seen < max_nodes:
+        cur = stack.pop()
+        seen += 1
+        if isinstance(cur, dict):
+            if key in cur and isinstance(cur.get(key), dict):
+                return cur
+            for v in cur.values():
+                if isinstance(v, (dict, list)):
+                    stack.append(v)
+        elif isinstance(cur, list):
+            for v in cur:
+                if isinstance(v, (dict, list)):
+                    stack.append(v)
+    return None
+
+
 class TikTokPlaywrightSource(Source):
     name = "tiktok"
 
@@ -96,6 +195,13 @@ class TikTokPlaywrightSource(Source):
         max_videos = _env_int("TIKTOK_SCAN_VIDEOS", 10)
         scrolls = _env_int("TIKTOK_SCROLLS", 6)
         locale = os.getenv("TIKTOK_LOCALE", "en")
+
+        # Screenshots are ON by default for the Playwright collector (requirement: always capture frames).
+        screenshots_enabled = _env_bool("TIKTOK_SCREENSHOTS", True)
+        screenshot_count = max(1, _env_int("TIKTOK_SCREENSHOT_COUNT", 5))
+        screenshot_interval_sec = max(0.25, _env_float("TIKTOK_SCREENSHOT_INTERVAL_SEC", 3.0))
+        # Requirement: capture up to 5 frames per post.
+        effective_count = min(screenshot_count, 5)
 
         kw = next_keyword() or "trending"
         now = datetime.now(timezone.utc).isoformat()
@@ -125,8 +231,9 @@ class TikTokPlaywrightSource(Source):
             # Heuristic: presence of "Log in" button/text.
             try:
                 if page.get_by_text("Log in").first.is_visible():
-                    # Give a clear instruction in console.
-                    print("[tiktok] Login appears required. Please log in in the opened browser window, then re-run.")
+                    print(
+                        "[tiktok] Login appears required. Please log in in the opened browser window, then re-run."
+                    )
             except Exception:
                 pass
 
@@ -156,19 +263,109 @@ class TikTokPlaywrightSource(Source):
                 if len(candidates) >= max_videos:
                     break
 
+            # If search extraction fails (TikTok can error / block automation),
+            # fall back to seed URLs if present so the collector still works.
+            if not candidates:
+                try:
+                    seed_path = os.path.abspath("./config/tiktok_seed.jsonl")
+                    if os.path.exists(seed_path):
+                        for ln in open(seed_path, "r", encoding="utf-8").read().splitlines():
+                            if not ln.strip():
+                                continue
+                            j = json.loads(ln)
+                            href = (j.get("url") or "").strip()
+                            if not href or "/video/" not in href:
+                                continue
+                            href = href.split("?")[0]
+                            if href in seen:
+                                continue
+                            seen.add(href)
+                            candidates.append((href, _clean_text(j.get("text") or j.get("title") or "")))
+                            if len(candidates) >= max_videos:
+                                break
+                        if candidates:
+                            print(f"[tiktok] No links found on search page; falling back to {seed_path} ({len(candidates)} urls)")
+                except Exception:
+                    pass
+
             # Best-effort: for each candidate, open and read stats if available.
             for url, anchor_text in candidates:
                 metrics: Dict[str, Any] = {"keyword": kw, "collector": "playwright"}
                 title = "(tiktok)"
                 text = anchor_text or None
+                created_at: str | None = None
 
                 try:
                     page.goto(url, wait_until="domcontentloaded")
                     page.wait_for_timeout(1200)
 
-                    # Caption text
+                    # Metadata from __NEXT_DATA__ (best effort, more stable than DOM)
+                    nd = _try_extract_next_data(page)
+                    item_struct = None
+                    if nd:
+                        item_struct = _dig(nd, ["props", "pageProps", "itemInfo", "itemStruct"])
+                        if not isinstance(item_struct, dict):
+                            # fallback: find any dict containing itemStruct
+                            w = _find_first_dict_with_key(nd, "itemStruct")
+                            if w and isinstance(w.get("itemStruct"), dict):
+                                item_struct = w.get("itemStruct")
+
+                    if isinstance(item_struct, dict):
+                        # creator
+                        try:
+                            au = (item_struct.get("author") or {})
+                            uid = au.get("uniqueId") or au.get("uniqueID")
+                            if uid:
+                                metrics["creator"] = str(uid)
+                        except Exception:
+                            pass
+
+                        # hashtags
+                        try:
+                            tx = item_struct.get("textExtra")
+                            tags = []
+                            if isinstance(tx, list):
+                                for e in tx:
+                                    if not isinstance(e, dict):
+                                        continue
+                                    hn = e.get("hashtagName")
+                                    if hn:
+                                        tags.append(f"#{hn}")
+                            if tags:
+                                metrics["hashtags"] = list(dict.fromkeys(tags))
+                        except Exception:
+                            pass
+
+                        # sound/music
+                        try:
+                            mu = (item_struct.get("music") or {})
+                            st = mu.get("title")
+                            sa = mu.get("authorName") or mu.get("author")
+                            if st:
+                                metrics["sound_title"] = str(st)
+                            if sa:
+                                metrics["sound_artist"] = str(sa)
+                        except Exception:
+                            pass
+
+                        # posted time
+                        try:
+                            ct = item_struct.get("createTime")
+                            if ct is not None:
+                                ts = int(ct)
+                                created_at = datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
+                                metrics["posted_time"] = created_at
+                        except Exception:
+                            pass
+
+                    # Caption text (DOM fallback)
                     cap = None
-                    for sel in ["[data-e2e='browse-video-desc']", "[data-e2e='video-desc']", "h1", "[class*='Desc']"]:
+                    for sel in [
+                        "[data-e2e='browse-video-desc']",
+                        "[data-e2e='video-desc']",
+                        "h1",
+                        "[class*='Desc']",
+                    ]:
                         try:
                             cap = page.locator(sel).first.inner_text(timeout=1500)
                             if cap and cap.strip():
@@ -178,6 +375,64 @@ class TikTokPlaywrightSource(Source):
                     if cap:
                         text = _clean_text(cap)
                         title = (text[:80] + "…") if len(text) > 80 else text
+
+                    # If creator wasn't found in JSON, try from URL / DOM
+                    if "creator" not in metrics:
+                        m = re.search(r"tiktok\.com/@([^/]+)/video/", url)
+                        if m:
+                            metrics["creator"] = m.group(1)
+                        else:
+                            try:
+                                href = page.locator("a[href^='https://www.tiktok.com/@']").first.get_attribute(
+                                    "href", timeout=1200
+                                )
+                                if href:
+                                    m2 = re.search(r"tiktok\.com/@([^/?#]+)", href)
+                                    if m2:
+                                        metrics["creator"] = m2.group(1)
+                            except Exception:
+                                pass
+
+                    # Hashtags: derive from caption if needed
+                    if "hashtags" not in metrics:
+                        tags = _hashtags_from_text(text)
+                        if tags:
+                            metrics["hashtags"] = tags
+
+                    # Sound: DOM fallback if needed
+                    if "sound_title" not in metrics and "sound_artist" not in metrics:
+                        snd_txt = None
+                        for sel in ["[data-e2e='browse-music']", "a[href*='/music/']"]:
+                            try:
+                                snd_txt = page.locator(sel).first.inner_text(timeout=1200)
+                                if snd_txt and snd_txt.strip():
+                                    break
+                            except Exception:
+                                snd_txt = None
+                        st, sa = _parse_sound_text(snd_txt)
+                        if st:
+                            metrics["sound_title"] = st
+                        if sa:
+                            metrics["sound_artist"] = sa
+
+                    # Posted time: DOM fallback if needed
+                    if "posted_time" not in metrics:
+                        try:
+                            tnodes = page.eval_on_selector_all(
+                                "time",
+                                """els => els.map(e => ({dt: e.getAttribute('datetime')||'', tx: (e.innerText||'')})).slice(0,5)""",
+                            )
+                            for t in tnodes or []:
+                                dt = _clean_text(t.get("dt") or "")
+                                tx = _clean_text(t.get("tx") or "")
+                                if dt:
+                                    metrics["posted_time"] = dt
+                                    break
+                                if tx and len(tx) <= 64:
+                                    metrics["posted_time"] = tx
+                                    break
+                        except Exception:
+                            pass
 
                     # Metrics: look for numeric counters (best-effort)
                     # Common pattern: buttons with aria-label like "1234 likes"
@@ -203,19 +458,46 @@ class TikTokPlaywrightSource(Source):
                     except Exception:
                         pass
 
+                    # Compute item_id (used for screenshots folder). Use URL-only so the id is stable
+                    # even if TikTok caption/title text changes between runs.
+                    item_id = stable_id(self.name, url)
+
+                    # Optional screenshots
+                    if screenshots_enabled:
+                        try:
+                            page.wait_for_selector("video", timeout=5000)
+                        except Exception:
+                            pass
+
+                        shot_dir = os.path.abspath(os.path.join("./data/screenshots", item_id))
+                        os.makedirs(shot_dir, exist_ok=True)
+                        shots: list[str] = []
+                        for i in range(effective_count):
+                            if i > 0:
+                                page.wait_for_timeout(int(screenshot_interval_sec * 1000))
+                            fn = f"frame_{i+1:02d}.png"
+                            abs_path = os.path.join(shot_dir, fn)
+                            try:
+                                page.screenshot(path=abs_path)
+                                shots.append(_relpath_posix(abs_path))
+                            except Exception:
+                                break
+                        # Always store the list (may be empty if screenshotting failed).
+                        metrics["screenshots"] = shots
+
                 except Exception:
                     # If navigation fails, keep the minimal data.
-                    pass
+                    item_id = stable_id(self.name, url)
 
                 out.append(
                     Item(
-                        item_id=stable_id(self.name, url, title),
+                        item_id=item_id,
                         source=self.name,
                         url=url,
                         title=title,
                         text=text,
                         metrics=metrics,
-                        created_at=None,
+                        created_at=created_at,
                         fetched_at=now,
                         raw={"url": url, "anchor_text": anchor_text, "search_url": search_url},
                     )

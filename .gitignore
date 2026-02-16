@@ -16,6 +16,9 @@ node_modules/
 *.log
 *.pid
 
+# Optional local seed inputs (user-provided)
+/config/*_seed.jsonl
+
 # Playwright persistent profiles (contains cookies)
 /data/playwright/
 

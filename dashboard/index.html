@@ -159,6 +159,43 @@
       .split { grid-template-columns: 1fr; }
       thead th { top: 0; position: static; }
     }
+
+    /* item side panel */
+    .backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.45);
+      backdrop-filter: blur(2px);
+      z-index: 40;
+    }
+    .drawer {
+      position: fixed;
+      top: 0;
+      right: 0;
+      height: 100vh;
+      width: min(520px, 92vw);
+      background: linear-gradient(180deg, rgba(15,22,33,0.96), rgba(12,18,27,0.96));
+      border-left: 1px solid var(--border);
+      box-shadow: var(--shadow);
+      z-index: 50;
+      padding: 14px;
+      overflow: auto;
+    }
+    .hidden { display: none; }
+    .drawer h3 { margin: 0; font-size: 16px; }
+    .drawer .meta { color: var(--muted); font-size: 12px; margin-top: 6px; line-height: 1.4; }
+    .drawer .shots {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      margin-top: 12px;
+    }
+    .drawer img {
+      width: 100%;
+      border-radius: 10px;
+      border: 1px solid rgba(148,163,184,0.18);
+      display: block;
+    }
   </style>
 </head>
 
@@ -267,6 +304,16 @@
     </table>
   </div>
 
+  <!-- Side panel for viewing an item + screenshots -->
+  <div id="backdrop" class="backdrop hidden"></div>
+  <div id="drawer" class="drawer hidden">
+    <div class="row" style="justify-content: space-between; align-items:center;">
+      <div style="font-weight:750;">Item</div>
+      <button class="btn" id="closeDrawer">Close</button>
+    </div>
+    <div id="drawerBody" style="margin-top:12px;"></div>
+  </div>
+
 <script>
   function escapeHtml(s) {
     return String(s ?? '').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;');
@@ -348,6 +395,70 @@
     const s = (score === null || score === undefined || Number.isNaN(Number(score))) ? '—' : Number(score).toFixed(2);
     return `<div class="row" style="gap:8px; align-items:center;">${badgeHtml(bucket)}<span class="small">${escapeHtml(s)}</span></div>`;
   }
+
+  // item drawer
+  const backdrop = document.getElementById('backdrop');
+  const drawer = document.getElementById('drawer');
+  const drawerBody = document.getElementById('drawerBody');
+
+  function closeDrawer() {
+    drawer.classList.add('hidden');
+    backdrop.classList.add('hidden');
+    drawerBody.innerHTML = '';
+  }
+
+  function renderKV(k, v) {
+    if (!v) return '';
+    if (Array.isArray(v)) v = v.join(' ');
+    return `<div class="meta"><b>${escapeHtml(k)}:</b> ${escapeHtml(v)}</div>`;
+  }
+
+  async function openDrawer(itemId) {
+    drawer.classList.remove('hidden');
+    backdrop.classList.remove('hidden');
+    drawerBody.innerHTML = `<div class="small">Loading…</div>`;
+
+    const res = await fetch(`/api/item?id=${encodeURIComponent(itemId)}`);
+    const j = await res.json();
+    if (!j || !j.ok) {
+      drawerBody.innerHTML = `<div class="small">Error loading item.</div>`;
+      return;
+    }
+
+    const it = j.item || {};
+    const m = it.metrics || {};
+    const shots = it.screenshot_urls || [];
+
+    const risk = m.risk_flags || null;
+    const riskBits = [];
+    if (risk && typeof risk === 'object') {
+      if (risk.ad_sponsored) riskBits.push('ad/sponsored');
+      if (risk.misinformation_or_medical_claim) riskBits.push('misinfo/medical');
+    }
+
+    const header = `
+      <h3>${escapeHtml(it.title || '(item)')}</h3>
+      <div class="meta">
+        <a href="${escapeAttr(it.url || '')}" target="_blank" rel="noreferrer">Open link</a>
+        ${riskBits.length ? ` • <span class="chip">risk: ${escapeHtml(riskBits.join(', '))}</span>` : ''}
+      </div>
+      ${renderKV('creator', m.creator)}
+      ${renderKV('hashtags', m.hashtags)}
+      ${renderKV('sound', [m.sound_title, m.sound_artist].filter(Boolean).join(' — '))}
+      ${renderKV('summary', m.context_summary)}
+      ${renderKV('why spreading', m.why_spreading)}
+    `;
+
+    const shotsHtml = shots.length ? `
+      <div style="margin-top:12px; font-weight:700;">Screenshots</div>
+      <div class="shots">${shots.map(u => `<a href="${escapeAttr(u)}" target="_blank" rel="noreferrer"><img src="${escapeAttr(u)}" loading="lazy" /></a>`).join('')}</div>
+    ` : `<div class="small" style="margin-top:12px;">No screenshots on this item.</div>`;
+
+    drawerBody.innerHTML = header + shotsHtml;
+  }
+
+  document.getElementById('closeDrawer').addEventListener('click', closeDrawer);
+  backdrop.addEventListener('click', closeDrawer);
 
   // client-side sorting state
   let sortState = { key: 'score', dir: 'desc' };
@@ -532,10 +643,25 @@
     for (const x of sorted) {
       const tr = document.createElement('tr');
       const url = x.r.url || '';
+      const itemId = x.r.item_id || '';
+      const hasShots = Array.isArray(x.m && x.m.screenshots) && x.m.screenshots.length > 0;
+      const view = hasShots
+        ? `<a href="#" class="viewLink" data-id="${escapeAttr(itemId)}">view</a>`
+        : '';
+
+      tr.setAttribute('data-id', itemId);
+      tr.setAttribute('data-has-shots', hasShots ? '1' : '0');
+
       tr.innerHTML = `
         <td class="small">${escapeHtml(x.ft)}</td>
         <td><span class="chip">${escapeHtml(x.ticker || '—')}</span></td>
-        <td><div style="font-weight:650;">${escapeHtml(x.brand || '')}</div><div class="small"><a href="${escapeAttr(url)}" target="_blank" rel="noreferrer">open</a></div></td>
+        <td>
+          <div style="font-weight:650;">${escapeHtml(x.brand || '')}</div>
+          <div class="small">
+            <a href="${escapeAttr(url)}" target="_blank" rel="noreferrer">open</a>
+            ${view ? ` • ${view}` : ''}
+          </div>
+        </td>
         <td><span class="chip">${escapeHtml(x.r.source || '')}</span></td>
         <td>${confCell(x.r.score)}</td>
         <td>${escapeHtml(x.r.text || x.r.title || '')}<div class="small" style="margin-top:6px;">${escapeHtml(x.context)}</div></td>
@@ -570,6 +696,28 @@
   document.getElementById('saveKw').addEventListener('click', () => saveKeywords().catch(()=>{}));
 
   setupSorting();
+
+  // delegate clicks: view link OR row click (when screenshots exist)
+  document.getElementById('rows').addEventListener('click', (ev) => {
+    const a = ev.target && ev.target.closest ? ev.target.closest('a') : null;
+    const viewA = a && a.classList && a.classList.contains('viewLink') ? a : null;
+
+    if (viewA) {
+      ev.preventDefault();
+      const id = viewA.getAttribute('data-id') || '';
+      if (id) openDrawer(id).catch(()=>{});
+      return;
+    }
+
+    // If user clicked a regular link ("open"), let it behave normally.
+    if (a) return;
+
+    const tr = ev.target && ev.target.closest ? ev.target.closest('tr') : null;
+    if (!tr) return;
+    if (tr.getAttribute('data-has-shots') !== '1') return;
+    const id = tr.getAttribute('data-id') || '';
+    if (id) openDrawer(id).catch(()=>{});
+  });
 
   // load initial
   loadSignals().catch(err => { document.getElementById('status').textContent = `Error: ${err}`; });

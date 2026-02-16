@@ -13,6 +13,7 @@ const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3456;
 const DB_PATH = process.env.CLAWDBOT_DB_PATH || path.join(__dirname, 'data', 'clawdbot.sqlite');
 const DASH_DIR = path.join(__dirname, 'dashboard');
 const KEYWORDS_PATH = process.env.KEYWORDS_PATH || path.join(__dirname, 'config', 'keywords.txt');
+const SCREENSHOTS_DIR = path.join(__dirname, 'data', 'screenshots');
 
 function send(res, code, body, headers = {}) {
   res.writeHead(code, { 'content-type': 'text/plain; charset=utf-8', ...headers });
@@ -32,6 +33,9 @@ function contentType(p) {
   if (p.endsWith('.html')) return 'text/html; charset=utf-8';
   if (p.endsWith('.js')) return 'text/javascript; charset=utf-8';
   if (p.endsWith('.css')) return 'text/css; charset=utf-8';
+  if (p.endsWith('.png')) return 'image/png';
+  if (p.endsWith('.jpg') || p.endsWith('.jpeg')) return 'image/jpeg';
+  if (p.endsWith('.webp')) return 'image/webp';
   return 'application/octet-stream';
 }
 
@@ -52,6 +56,21 @@ function querySignals(minScore) {
   return items;
 }
 
+function queryItem(itemId) {
+  if (!/^[0-9a-f]{24}$/i.test(String(itemId || ''))) return null;
+
+  const sql = `
+    SELECT item_id, source, url, title, text, metrics_json, score, created_at, fetched_at
+    FROM items
+    WHERE item_id = '${String(itemId).toLowerCase()}'
+    LIMIT 1;
+  `;
+  const out = execFileSync('sqlite3', ['-json', DB_PATH, sql], { encoding: 'utf-8' });
+  let rows = [];
+  try { rows = JSON.parse(out || '[]'); } catch (e) { rows = []; }
+  return rows[0] || null;
+}
+
 const server = http.createServer((req, res) => {
   const u = new URL(req.url, `http://${req.headers.host}`);
 
@@ -63,6 +82,44 @@ const server = http.createServer((req, res) => {
     } catch (e) {
       return sendJson(res, { from: 'sqlite', db_path: DB_PATH, items: [], error: String(e) });
     }
+  }
+
+  if (u.pathname === '/api/item') {
+    try {
+      const id = u.searchParams.get('id') || '';
+      const item = queryItem(id);
+      if (!item) return sendJson(res, { ok: false, error: 'not found' });
+
+      let metrics = {};
+      try { metrics = JSON.parse(item.metrics_json || '{}'); } catch (e) { metrics = {}; }
+      const screenshots = Array.isArray(metrics.screenshots) ? metrics.screenshots : [];
+
+      // Provide convenient URLs for rendering.
+      const screenshot_urls = screenshots
+        .map(p => String(p || ''))
+        .filter(Boolean)
+        // stored like data/screenshots/<id>/frame_01.png
+        .map(p => p.replace(/^\.?\/?data\/?screenshots\//, ''))
+        .map(p => `/screenshots/${p}`);
+
+      return sendJson(res, { ok: true, item: { ...item, metrics, screenshots, screenshot_urls } });
+    } catch (e) {
+      return sendJson(res, { ok: false, error: String(e) });
+    }
+  }
+
+  // Serve screenshot files from ./data/screenshots/<item_id>/frame_XX.png
+  if (u.pathname.startsWith('/screenshots/')) {
+    const rel = u.pathname.replace(/^\/screenshots\//, '').replace(/\.\.+/g, '.');
+    const abs = path.join(SCREENSHOTS_DIR, rel);
+    if (!abs.startsWith(SCREENSHOTS_DIR)) return send(res, 403, 'forbidden');
+
+    const buf = readFileSafe(abs);
+    if (!buf) return send(res, 404, 'not found');
+
+    res.writeHead(200, { 'content-type': contentType(abs), 'cache-control': 'public, max-age=3600' });
+    res.end(buf);
+    return;
   }
 
   if (u.pathname === '/api/keywords' && req.method === 'GET') {

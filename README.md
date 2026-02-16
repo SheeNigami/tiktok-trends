@@ -73,6 +73,26 @@ moondev-clawdbot ingest --sources tiktok
 
 If the dashboard still shows `https://www.tiktok.com/@example/video/...`, you likely have old mock rows in the DB (see cleanup below).
 
+#### (Optional) Capture per-post screenshots (Playwright collector)
+
+If you want to save a few frames for later OCR / debugging:
+
+```bash
+export TIKTOK_COLLECTOR=playwright
+export TIKTOK_SCREENSHOTS=1
+export TIKTOK_SCREENSHOT_COUNT=5
+export TIKTOK_SCREENSHOT_INTERVAL_SEC=3
+
+# keep it small while testing
+export TIKTOK_SCAN_VIDEOS=1
+
+moondev-clawdbot ingest --sources tiktok
+```
+
+Screenshots are saved under:
+
+- `data/screenshots/<item_id>/frame_01.png`, `frame_02.png`, ...
+
 ### 2c) Cleanup: remove placeholder `@example` rows (optional)
 
 Dry-run (prints matches, no deletes):
@@ -112,6 +132,29 @@ moondev-clawdbot run once --sources tiktok,x_mock
 # then start the node server
 node server.js
 # open http://localhost:3456
+```
+
+If an item has screenshots in `metrics_json.screenshots`, the table will show a **view** link and you can click the row to open a side panel with the screenshot frames.
+
+## Optional: LLM enrichment (OpenAI)
+
+During ingest, items are enriched with a lightweight offline regex approach by default.
+
+If you set `OPENAI_API_KEY` **and** have the `openai` Python package installed, the ingest step will additionally call OpenAI Chat Completions to produce structured fields in `metrics_json`, including:
+
+- `context_summary` (1–2 sentences)
+- `key_entities`
+- `related_tickers` (with confidence)
+- `why_spreading`
+- `risk_flags` (ad/sponsored, misinformation/medical claim)
+
+Optional OCR: if `pytesseract` is installed and the `tesseract` binary is available, the enrich step will OCR up to a couple screenshots and include that text in the LLM prompt.
+
+Config:
+
+```bash
+export OPENAI_API_KEY=...
+export OPENAI_MODEL=gpt-4o-mini
 ```
 
 ## CLI
