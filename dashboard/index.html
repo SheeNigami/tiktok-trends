@@ -63,7 +63,7 @@
     .controls {
       margin-top: 18px;
       display:grid;
-      grid-template-columns: 1.6fr 1fr 1fr 1fr 1fr;
+      grid-template-columns: 1.6fr 1fr 1fr 1fr 1fr 1fr;
       gap: 10px;
       align-items: end;
     }
@@ -248,6 +248,13 @@
       </div>
 
       <div class="card">
+        <label>Keyword group</label>
+        <select id="kwGroup">
+          <option value="all">All</option>
+        </select>
+      </div>
+
+      <div class="card">
         <label>Confidence</label>
         <select id="conf">
           <option value="all">All</option>
@@ -267,15 +274,34 @@
       <div class="card">
         <div class="row" style="justify-content: space-between;">
           <div>
-            <div style="font-weight:700;">Keywords</div>
-            <div class="small">Edit the rotating keyword list (one per line). This updates <code>config/keywords.txt</code>.</div>
+            <div style="font-weight:700;">Keyword groups</div>
+            <div class="small">Manage keyword groups (named sets). Active group drives ingestion rotation; table can filter by group.</div>
           </div>
           <button class="btn" id="loadKw">Load</button>
         </div>
+        <div class="row" style="margin-top:10px;">
+          <div style="flex:1;">
+            <label>Active group (used for ingestion rotation)</label>
+            <select id="kwActive"></select>
+          </div>
+          <div style="width: 180px;">
+            <label>New group</label>
+            <input id="kwNewGroup" placeholder="e.g. gym-supps" />
+          </div>
+          <div style="width: 120px;">
+            <label>&nbsp;</label>
+            <button class="btn" id="kwAddGroup">Add</button>
+          </div>
+        </div>
+
+        <label style="margin-top:10px;">Keywords in selected group</label>
         <textarea id="kw"></textarea>
         <div class="row" style="justify-content: space-between; margin-top:10px;">
           <div class="small" id="kwStatus"></div>
-          <button class="btn primary" id="saveKw">Save keywords</button>
+          <div class="row">
+            <button class="btn" id="kwDeleteGroup">Delete group</button>
+            <button class="btn primary" id="saveKw">Save group</button>
+          </div>
         </div>
       </div>
 
@@ -582,6 +608,8 @@
     const type = document.getElementById('type').value;
     const source = document.getElementById('source').value;
     const conf = document.getElementById('conf').value;
+    const kwGroup = document.getElementById('kwGroup').value || 'all';
+    const kwSet = (kwGroup !== 'all' && kwGroups && kwGroups.groups && kwGroups.groups[kwGroup]) ? new Set(kwGroups.groups[kwGroup]) : null;
 
     const rows = [];
 
@@ -616,6 +644,7 @@
       if (type !== 'all' && itType !== type) continue;
       if (source !== 'all' && (r.source || '') !== source) continue;
       if (conf !== 'all' && cb !== conf) continue;
+      if (kwSet && (!m.keyword || !kwSet.has(String(m.keyword)))) continue;
 
       const hay = `${ticker} ${trend} ${brand} ${(r.title||'')} ${(r.text||'')} ${ctxPrimary} ${(m.keyword||'')}`.toLowerCase();
       if (q && !hay.includes(q)) continue;
@@ -729,27 +758,129 @@
     status.textContent = `Showing ${sorted.length} / ${items.length}`;
   }
 
-  async function loadKeywords() {
-    const res = await fetch('/api/keywords');
-    const j = await res.json();
-    document.getElementById('kw').value = j.text || '';
-    document.getElementById('kwStatus').textContent = `Loaded from ${j.path}`;
+  let kwGroups = { active: 'default', groups: {} };
+  let kwSelected = 'default';
+
+  function groupNames() {
+    return Object.keys(kwGroups.groups || {}).sort((a,b)=>a.localeCompare(b));
   }
 
-  async function saveKeywords() {
-    const text = document.getElementById('kw').value || '';
-    const res = await fetch('/api/keywords', {
+  function refreshKwSelectors() {
+    const names = groupNames();
+    const activeSel = document.getElementById('kwActive');
+    const filterSel = document.getElementById('kwGroup');
+
+    activeSel.innerHTML = '';
+    for (const n of names) {
+      const opt = document.createElement('option');
+      opt.value = n;
+      opt.textContent = n;
+      activeSel.appendChild(opt);
+    }
+    if (!names.includes(kwGroups.active)) kwGroups.active = names[0] || 'default';
+    activeSel.value = kwGroups.active;
+
+    // filter selector
+    const cur = filterSel.value || 'all';
+    filterSel.innerHTML = '';
+    const optAll = document.createElement('option');
+    optAll.value = 'all';
+    optAll.textContent = 'All';
+    filterSel.appendChild(optAll);
+    for (const n of names) {
+      const opt = document.createElement('option');
+      opt.value = n;
+      opt.textContent = n;
+      filterSel.appendChild(opt);
+    }
+    filterSel.value = names.includes(cur) ? cur : 'all';
+
+    // default selected group for editing
+    kwSelected = kwSelected && names.includes(kwSelected) ? kwSelected : (kwGroups.active || names[0] || 'default');
+    const txt = (kwGroups.groups && kwGroups.groups[kwSelected]) ? kwGroups.groups[kwSelected].join('\n') : '';
+    document.getElementById('kw').value = txt;
+  }
+
+  async function loadKeywordGroups() {
+    const res = await fetch('/api/keyword-groups');
+    const j = await res.json();
+    if (!j || j.ok === false) {
+      document.getElementById('kwStatus').textContent = `Failed to load groups: ${j && j.error ? j.error : 'unknown'}`;
+      return;
+    }
+    kwGroups = { active: j.active || 'default', groups: j.groups || {} };
+    if (!kwGroups.groups || Object.keys(kwGroups.groups).length === 0) {
+      // fallback: create a default group from keywords.txt
+      const r2 = await fetch('/api/keywords');
+      const k2 = await r2.json();
+      const kws = String(k2.text || '').split(/\r?\n/).map(x=>x.trim()).filter(x=>x && !x.startsWith('#'));
+      kwGroups.groups = { default: kws };
+      kwGroups.active = 'default';
+    }
+    refreshKwSelectors();
+    document.getElementById('kwStatus').textContent = `Loaded groups (${Object.keys(kwGroups.groups).length})`;
+  }
+
+  async function saveKeywordGroups() {
+    // persist active + groups
+    kwGroups.active = document.getElementById('kwActive').value || kwGroups.active || 'default';
+    // update selected group keywords from textarea
+    const txt = document.getElementById('kw').value || '';
+    const kws = txt.split(/\r?\n/).map(x=>x.trim()).filter(x=>x && !x.startsWith('#'));
+    if (!kwSelected) kwSelected = kwGroups.active;
+    kwGroups.groups[kwSelected] = kws;
+
+    const res = await fetch('/api/keyword-groups', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ text }),
+      body: JSON.stringify({ active: kwGroups.active, groups: kwGroups.groups }),
     });
     const j = await res.json();
-    document.getElementById('kwStatus').textContent = j.ok ? `Saved (${j.bytes} bytes) → ${j.path}` : `Save failed: ${j.error}`;
+    document.getElementById('kwStatus').textContent = j.ok ? `Saved groups → ${j.path}` : `Save failed: ${j.error}`;
+    await loadKeywordGroups();
+  }
+
+  async function addKeywordGroup() {
+    const name = (document.getElementById('kwNewGroup').value || '').trim();
+    if (!name) return;
+    if (!kwGroups.groups) kwGroups.groups = {};
+    if (kwGroups.groups[name]) {
+      document.getElementById('kwStatus').textContent = `Group exists: ${name}`;
+      return;
+    }
+    kwGroups.groups[name] = [];
+    kwSelected = name;
+    document.getElementById('kwNewGroup').value = '';
+    await saveKeywordGroups();
+  }
+
+  async function deleteKeywordGroup() {
+    const names = groupNames();
+    if (names.length <= 1) {
+      document.getElementById('kwStatus').textContent = 'Cannot delete the last group.';
+      return;
+    }
+    const target = kwSelected || kwGroups.active;
+    if (!target || !kwGroups.groups[target]) return;
+    delete kwGroups.groups[target];
+    if (kwGroups.active === target) kwGroups.active = groupNames()[0] || 'default';
+    kwSelected = kwGroups.active;
+    await saveKeywordGroups();
+  }
+
+  function selectGroupFromUI() {
+    kwSelected = document.getElementById('kwActive').value || kwGroups.active || 'default';
+    const txt = (kwGroups.groups && kwGroups.groups[kwSelected]) ? kwGroups.groups[kwSelected].join('\n') : '';
+    document.getElementById('kw').value = txt;
   }
 
   document.getElementById('refreshBtn').addEventListener('click', () => loadSignals().catch(()=>{}));
-  document.getElementById('loadKw').addEventListener('click', () => loadKeywords().catch(()=>{}));
-  document.getElementById('saveKw').addEventListener('click', () => saveKeywords().catch(()=>{}));
+  document.getElementById('loadKw').addEventListener('click', () => loadKeywordGroups().catch(()=>{}));
+  document.getElementById('saveKw').addEventListener('click', () => saveKeywordGroups().catch(()=>{}));
+  document.getElementById('kwAddGroup').addEventListener('click', () => addKeywordGroup().catch(()=>{}));
+  document.getElementById('kwDeleteGroup').addEventListener('click', () => deleteKeywordGroup().catch(()=>{}));
+  document.getElementById('kwActive').addEventListener('change', () => selectGroupFromUI());
+  document.getElementById('kwGroup').addEventListener('change', () => loadSignals().catch(()=>{}));
 
   setupSorting();
 
@@ -777,7 +908,7 @@
 
   // load initial
   loadSignals().catch(err => { document.getElementById('status').textContent = `Error: ${err}`; });
-  loadKeywords().catch(()=>{});
+  loadKeywordGroups().catch(()=>{});
 
   // soft auto-refresh
   setInterval(() => {

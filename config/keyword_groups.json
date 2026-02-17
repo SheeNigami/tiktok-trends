@@ -1,0 +1,13 @@
+{
+  "active": "default",
+  "groups": {
+    "default": [
+      "matcha",
+      "protein",
+      "haul",
+      "streetwear",
+      "skincare",
+      "ai"
+    ]
+  }
+}

@@ -13,6 +13,7 @@ const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3456;
 const DB_PATH = process.env.CLAWDBOT_DB_PATH || path.join(__dirname, 'data', 'clawdbot.sqlite');
 const DASH_DIR = path.join(__dirname, 'dashboard');
 const KEYWORDS_PATH = process.env.KEYWORDS_PATH || path.join(__dirname, 'config', 'keywords.txt');
+const KEYWORD_GROUPS_PATH = process.env.KEYWORD_GROUPS_PATH || path.join(__dirname, 'config', 'keyword_groups.json');
 const SCREENSHOTS_DIR = path.join(__dirname, 'data', 'screenshots');
 
 function send(res, code, body, headers = {}) {
@@ -155,6 +156,45 @@ const server = http.createServer((req, res) => {
         return sendJson(res, { ok: true, path: KEYWORDS_PATH, bytes: Buffer.byteLength(normalized, 'utf-8') });
       } catch (e) {
         return sendJson(res, { ok: false, error: String(e) });
+      }
+    });
+    return;
+  }
+
+  // Keyword groups (preferred): { active: string, groups: { name: [keywords...] } }
+  if (u.pathname === '/api/keyword-groups' && req.method === 'GET') {
+    const buf = readFileSafe(KEYWORD_GROUPS_PATH);
+    if (!buf) return sendJson(res, { ok: true, path: KEYWORD_GROUPS_PATH, active: 'default', groups: {} });
+    try {
+      const j = JSON.parse(buf.toString('utf-8') || '{}');
+      return sendJson(res, { ok: true, path: KEYWORD_GROUPS_PATH, ...(j || {}) });
+    } catch (e) {
+      return sendJson(res, { ok: false, error: String(e), path: KEYWORD_GROUPS_PATH });
+    }
+  }
+
+  if (u.pathname === '/api/keyword-groups' && req.method === 'POST') {
+    let body = '';
+    req.on('data', (chunk) => { body += chunk; });
+    req.on('end', () => {
+      try {
+        const j = JSON.parse(body || '{}');
+        const active = String(j.active || 'default').trim() || 'default';
+        const groupsIn = (j.groups && typeof j.groups === 'object') ? j.groups : {};
+        const groups = {};
+        for (const [k, v] of Object.entries(groupsIn)) {
+          const name = String(k).trim();
+          if (!name) continue;
+          const arr = Array.isArray(v) ? v : String(v || '').split(/\r?\n/);
+          const kws = arr.map(x => String(x||'').trim()).filter(x => x && !x.startsWith('#'));
+          groups[name] = kws;
+        }
+        const payload = { active, groups };
+        fs.mkdirSync(path.dirname(KEYWORD_GROUPS_PATH), { recursive: true });
+        fs.writeFileSync(KEYWORD_GROUPS_PATH, JSON.stringify(payload, null, 2) + '\n', 'utf-8');
+        return sendJson(res, { ok: true, path: KEYWORD_GROUPS_PATH, active, group_count: Object.keys(groups).length });
+      } catch (e) {
+        return sendJson(res, { ok: false, error: String(e), path: KEYWORD_GROUPS_PATH });
       }
     });
     return;
