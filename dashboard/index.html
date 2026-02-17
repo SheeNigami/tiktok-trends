@@ -140,6 +140,10 @@
       line-height: 1.35;
     }
 
+    tbody tr[data-has-shots="1"] { cursor: pointer; }
+    tbody tr:hover { background: rgba(148,163,184,0.06); }
+    .viewLink { color: #7dd3fc; font-weight: 650; }
+
     .badge { display:inline-flex; align-items:center; gap:6px; padding: 4px 8px; border-radius: 999px; font-size: 12px; border: 1px solid var(--border); background: rgba(148,163,184,0.08); }
     .badge.high { border-color: rgba(52,211,153,0.35); color: #b9f6d1; background: rgba(52,211,153,0.10); }
     .badge.med { border-color: rgba(251,191,36,0.35); color: #fde68a; background: rgba(251,191,36,0.10); }
@@ -609,29 +613,40 @@
       const hay = `${ticker} ${trend} ${brand} ${(r.title||'')} ${(r.text||'')} ${ctxPrimary} ${(m.keyword||'')}`.toLowerCase();
       if (q && !hay.includes(q)) continue;
 
-      // Exposure: keep this column focused on *actionable* public tickers.
-      // Private/parent mappings are useful context but tend to clutter; we show them in the Context meta line instead.
+      // Exposure: show the *best guess* assets (from llm_enrich.candidates) if present,
+      // otherwise fall back to explicit investable tickers.
       const exposure = [];
-      if (Array.isArray(m.investable)) {
+
+      if (ve && Array.isArray(ve.candidates)) {
+        const cands = ve.candidates
+          .filter(c => c && (c.symbol || c.name))
+          .slice(0, 2)
+          .map(c => {
+            const t = String(c.asset_type || 'other').toUpperCase();
+            const sym = c.symbol ? String(c.symbol) : '';
+            const cf = (c.confidence === null || c.confidence === undefined) ? '' : ` ${Number(c.confidence).toFixed(2)}`;
+            return sym ? `${t}:${sym}${cf}` : `${t}${cf}`;
+          });
+        if (cands.length) exposure.push(cands.join(' • '));
+      }
+
+      if (!exposure.length && Array.isArray(m.investable)) {
         const invTickers = m.investable
           .map(x => x && (x.ticker ? `${x.brand||''} (${x.ticker})` : null))
           .filter(Boolean);
         if (invTickers.length) exposure.push(invTickers.join(' • '));
       }
 
+      // Context meta: keep it short + human-readable.
       const ctxBits = [];
       if (m.creator) ctxBits.push(`@${m.creator}`);
-      if (m.keyword) ctxBits.push(`kw: ${m.keyword}`);
-      if (m.posted_time) ctxBits.push(`posted: ${String(m.posted_time).slice(0, 10)}`);
-      if (m.sound_title) ctxBits.push(`sound: ${m.sound_title}`);
-      if (m.sound_artist) ctxBits.push(`${m.sound_artist}`);
-      if (m.view_velocity != null) ctxBits.push(`vel: ${Number(m.view_velocity).toFixed(2)}`);
-      if (m.views != null) ctxBits.push(`views: ${m.views}`);
-      if (m.likes != null) ctxBits.push(`likes: ${m.likes}`);
-      if (m.comments != null) ctxBits.push(`comments: ${m.comments}`);
-      if (m.shares != null) ctxBits.push(`shares: ${m.shares}`);
+      if (m.likes != null) ctxBits.push(`${m.likes} likes`);
+      if (m.posted_time) ctxBits.push(`${String(m.posted_time).slice(0, 10)}`);
+      if (m.keyword) ctxBits.push(`${m.keyword}`);
+      const snd = [m.sound_title, m.sound_artist].filter(Boolean).join(' — ');
+      if (snd) ctxBits.push(`sound: ${snd}`);
 
-      // Add parent/private mapping into context meta (not Exposure).
+      // Optional parent/private mapping as a single compact note.
       if (Array.isArray(m.investable)) {
         const invParents = m.investable
           .map(x => x && (!x.ticker && x.parent ? `${x.brand||''} → ${x.parent}` : null))
@@ -680,9 +695,7 @@
       const url = x.r.url || '';
       const itemId = x.r.item_id || '';
       const hasShots = Array.isArray(x.m && x.m.screenshots) && x.m.screenshots.length > 0;
-      const view = hasShots
-        ? `<a href="#" class="viewLink" data-id="${escapeAttr(itemId)}">view</a>`
-        : '';
+      const view = `<a href="#" class="viewLink" data-id="${escapeAttr(itemId)}">View details →</a>`;
 
       tr.setAttribute('data-id', itemId);
       tr.setAttribute('data-has-shots', hasShots ? '1' : '0');
