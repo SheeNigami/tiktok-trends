@@ -603,7 +603,14 @@
       const { ticker, brand } = extractBrandTicker(m, r.title);
       const ve = (m && typeof m === 'object') ? (m.llm_enrich || null) : null;
       const trend = (ve && ve.main_trend) ? String(ve.main_trend) : (brand || (r.title || ''));
-      const ctxPrimary = (ve && ve.context) ? String(ve.context) : '';
+      // If llm_enrich.context contains internal debug strings, strip them.
+      const ctxPrimaryRaw = (ve && ve.context) ? String(ve.context) : '';
+      const ctxPrimary = ctxPrimaryRaw
+        .replace(/image_fingerprints=[^;]+;?/gi, '')
+        .replace(/\btopic=other\b;?/gi, '')
+        .replace(/\s*;\s*/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
       if (ticker) byTicker.set(ticker, (byTicker.get(ticker) || 0) + 1);
 
       if (type !== 'all' && itType !== type) continue;

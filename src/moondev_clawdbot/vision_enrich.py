@@ -248,8 +248,9 @@ def vision_enrich_stub(it: Item, image_paths: list[str]) -> dict[str, Any]:
     best = candidates[0] if candidates else {"asset_type": "other"}
     asset_type: AssetType = best.get("asset_type") if best.get("asset_type") in ("stock", "crypto", "event", "other") else "other"
 
-    context = f"topic={topic}; image_fingerprints={','.join(fps) if fps else 'none'}"
-    why = "Likely spreading due to algorithmic distribution + remixable formats/audio + social proof." 
+    # Keep context human-readable (no internal fingerprints).
+    context = f"topic={topic}"
+    why = "Likely spreading due to algorithmic distribution + remixable formats/audio + social proof."
 
     return {
         "main_trend": main_trend,
